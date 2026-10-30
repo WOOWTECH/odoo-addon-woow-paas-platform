@@ -22,7 +22,7 @@ from ..models.cloud_service import _internal_provision
 MCP_SEEDS = (
     'cloud_app_mcp_hermes', 'cloud_app_mcp_odoo', 'cloud_app_mcp_odoo_manage', 'cloud_app_mcp_n8n',
     'cloud_app_mcp_k8s', 'cloud_app_mcp_vk', 'cloud_app_mcp_opendesign', 'cloud_app_mcp_litellm',
-    'cloud_app_mcp_nextcloud',
+    'cloud_app_mcp_nextcloud', 'cloud_app_mcp_emqx',
 )
 
 
