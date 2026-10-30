@@ -1,8 +1,8 @@
 """Seed assertions for the mcp-server chart family of cloud service templates.
 
-家族成員（9 個，判準＝``helm_chart_name`` 以 ``/mcp-server`` 結尾）：
+家族成員（10 個，判準＝``helm_chart_name`` 以 ``/mcp-server`` 結尾）：
 hermes（pilot）／odoo／odoo-manage／n8n／k8s／vk／opendesign／litellm（2026-10-05 以隱藏範本進 seed，10-07 公開上架）／
-nextcloud（以隱藏範本進 seed，沙盒實測後上架）。
+nextcloud（以隱藏範本進 seed，沙盒實測後上架）／emqx（PR97，等待實際 broker 與範本驗收）。
 
 ## 為什麼是兩層 mixin（#686）
 
@@ -43,6 +43,7 @@ MCP_SERVER_CHART_SUFFIX = '/mcp-server'
 # 來源與限制：docs/verification/2026-10-30-mcp95-template-pins.json。
 # 換 pin 必須先覆核發布證據與每個 app 的固定 LaunchPolicy。
 EXPECTED_IMAGE_TAGS = {
+    'emqx': 'b5ed89ca01acfc33a7ef57987f0f64a11f603ea3@sha256:f60858334f11147675a0071b5caf699692ccf31fb493347da5d856bf9a8828dc',
     'hermes': '3c93d0e727fdc948f1ea17cb5fa7d1ad1887a883@sha256:e1c15208e2209da68959fcc817af36be59cbaab1ec7f5b33383d99103a351847',
     'k8s': '3c93d0e727fdc948f1ea17cb5fa7d1ad1887a883@sha256:af1c182f5cb4f8c6e749a0f9f9ac1da38adcccfbf9be33f5f8b52afeb35ea6a4',
     'litellm': '3c93d0e727fdc948f1ea17cb5fa7d1ad1887a883@sha256:49ebff61914905500af77e0b3c6b8a71a881c0598ef14f98b7a1c2a26420a248',
@@ -601,6 +602,20 @@ class TestMcpNextcloudTemplateSeed(_McpServerSeedAssertions, TransactionCase):
     APP = 'nextcloud'
     EXPECT_ENV_PREFIX = 'NEXTCLOUD_MCP_'
     EXPECT_MCP_COMMAND = 'nextcloud-mcp-server'
+
+
+class TestMcpEmqxTemplateSeed(_McpServerSeedAssertions, TransactionCase):
+    """EMQX MCP 的既有家族不變式；broker 憑證／預設政策由專屬測試守護。"""
+
+    SLUG = 'mcp-emqx'
+    TMPL = 'woow_paas_platform.cloud_app_mcp_emqx'
+    PLAN_M = 'woow_paas_platform.plan_mcp_emqx_monthly'
+    PLAN_Y = 'woow_paas_platform.plan_mcp_emqx_yearly'
+    PROD_M = 'woow_paas_platform.product_mcp_emqx_monthly'
+    IMAGE_REPO_SUFFIX = 'emqx-mcp-admin'
+    APP = 'emqx'
+    EXPECT_ENV_PREFIX = 'EMQX_MCP_'
+    EXPECT_MCP_COMMAND = 'emqx-mcp-server'
 
 
 def _all_subclasses(cls):

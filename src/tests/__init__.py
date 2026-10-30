@@ -1052,6 +1052,7 @@ from . import test_mcp_litellm_seed
 # 「MCP：Nextcloud」（mcp-nextcloud）隱藏範本＋方案——image 雙釘＋重釘 lockstep、chart 0.1.7（非 root）、
 # 啟動契約、預設全開由 app 自己做（2026-10-25）、seed 不帶網址與 app password（網址由同工作區 Nextcloud 公開網址注入）。
 from . import test_mcp_nextcloud_seed
+from . import test_mcp_emqx_seed
 # QA CS-02／CS-03：code-server 的 git 作者身分與 Git Token 適用主機（helm_value_specs
 # 的 ``format``：存檔驗證＋部署時轉成 chart 形態）。
 from . import test_code_server_git_settings

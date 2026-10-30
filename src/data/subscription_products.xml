@@ -2559,6 +2559,63 @@
             <field name="taxes_id" eval="[(6, 0, [])]"/>
         </record>
 
+        <!-- MCP：EMQX：沿用一般 MCP 月 3000／年 24000、7 天試用方案。
+             無 access 變體／cs_* 規格覆寫；僅 EMQX MCP 範本使用，不與 broker 共用。 -->
+        <record id="plan_mcp_emqx_monthly" model="sh.subscription.plan">
+            <field name="name">MCP：EMQX 月繳</field>
+            <field name="sh_duration">1</field>
+            <field name="sh_unit">month</field>
+            <field name="sh_plan_price">3000</field>
+            <field name="sh_override_product" eval="True"/>
+            <field name="sh_no_of_billing_cycle">-1</field>
+            <field name="sh_never_expire" eval="True"/>
+            <field name="sh_trial" eval="True"/>
+            <field name="sh_trial_duration">7</field>
+            <field name="sh_trial_unit">day</field>
+            <field name="sh_start_immediately" eval="False"/>
+            <field name="sh_is_close_by_customer" eval="True"/>
+            <field name="sh_reminder"
+                   eval="[(4, ref('reminder_3days_before')), (4, ref('reminder_1day_before'))]"/>
+            <field name="service_type">cloud_service</field>
+        </record>
+        <record id="plan_mcp_emqx_yearly" model="sh.subscription.plan">
+            <field name="name">MCP：EMQX 年繳</field>
+            <field name="sh_duration">1</field>
+            <field name="sh_unit">year</field>
+            <field name="sh_plan_price">24000</field>
+            <field name="sh_override_product" eval="True"/>
+            <field name="sh_no_of_billing_cycle">-1</field>
+            <field name="sh_never_expire" eval="True"/>
+            <field name="sh_trial" eval="True"/>
+            <field name="sh_trial_duration">7</field>
+            <field name="sh_trial_unit">day</field>
+            <field name="sh_start_immediately" eval="False"/>
+            <field name="sh_is_close_by_customer" eval="True"/>
+            <field name="sh_reminder"
+                   eval="[(4, ref('reminder_3days_before')), (4, ref('reminder_1day_before'))]"/>
+            <field name="service_type">cloud_service</field>
+        </record>
+        <record id="product_mcp_emqx_monthly" model="product.product">
+            <field name="name">MCP：EMQX 月繳 Subscription</field>
+            <field name="type">service</field>
+            <field name="list_price">3000</field>
+            <field name="sale_ok" eval="True"/>
+            <field name="purchase_ok" eval="False"/>
+            <field name="sh_product_subscribe" eval="True"/>
+            <field name="sh_subscription_plan_id" ref="plan_mcp_emqx_monthly"/>
+            <field name="taxes_id" eval="[(6, 0, [])]"/>
+        </record>
+        <record id="product_mcp_emqx_yearly" model="product.product">
+            <field name="name">MCP：EMQX 年繳 Subscription</field>
+            <field name="type">service</field>
+            <field name="list_price">24000</field>
+            <field name="sale_ok" eval="True"/>
+            <field name="purchase_ok" eval="False"/>
+            <field name="sh_product_subscribe" eval="True"/>
+            <field name="sh_subscription_plan_id" ref="plan_mcp_emqx_yearly"/>
+            <field name="taxes_id" eval="[(6, 0, [])]"/>
+        </record>
+
         <!-- #341（Wave A）撞車收斂：HA PaaS 0 元 plan/product 沿用 Wave A 已在 develop
              的 plan_ha_paas_monthly / product_ha_paas_monthly（自帶 storefront_hidden=True），
              本 PR 原有的 plan_ha_paas / product_ha_paas 已移除避免重複 0 元 HA seed。
