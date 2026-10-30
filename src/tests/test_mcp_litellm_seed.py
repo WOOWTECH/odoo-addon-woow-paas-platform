@@ -65,8 +65,10 @@ IMAGE_REPOSITORY = JCR + 'litellm-mcp-admin'
 # 精確 9d723ff6 image 的既有隔離 runtime 收據：40 全開／15 唯讀／3 主動操作通過，
 # 使用合成 backend，設定已還原；不代表正式服務升級。來源雜湊與證據範圍見
 # docs/verification/2026-10-29-mcp93-litellm-launch-contract.json。
+# 2026-10-30：PR95 八映像發布證據與固定 LaunchPolicy 已核對；本 lane 未重跑 MCP runtime。
+# 證據：docs/verification/2026-10-30-mcp95-template-pins.json。
 EXPECT_IMAGE_TAG = (
-    'f748090eb782bc103edcd99ac9aa821f77294fb0@sha256:9d723ff679460da697c8b08369ee87571c4d60205542ae33dec7822ebd8d2ef8')
+    '3c93d0e727fdc948f1ea17cb5fa7d1ad1887a883@sha256:49ebff61914905500af77e0b3c6b8a71a881c0598ef14f98b7a1c2a26420a248')
 GIT_SHA_PINNED_TAG_RE = r'^[0-9a-f]{40}@sha256:[0-9a-f]{64}$'
 ENV_PREFIX = 'LITELLM_MCP_'
 READONLY_ENV = 'LITELLM_MCP_READONLY'
