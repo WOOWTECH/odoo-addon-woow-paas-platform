@@ -1511,9 +1511,17 @@
                  both stay disabled by default, so a new service renders the same resources as 0.3.13.
                  0.4.4 fixes the auto-updater bootstrap baseline (was pinned to plugin v0.1.4-rc.5, which
                  refused to adopt the current release v0.1.4-rc.6 with unreviewed_initial_revision).
-                 helm_default_values unchanged: appVersion is 0.22.5 in both chart versions.
-                 回滾值：0.3.13。 -->
-            <field name="helm_chart_version">0.4.4</field>
+                 0.4.5 hardens that same auto-updater, which runs as root once a day on an opt-in
+                 service: run.sh now calls runuser/env/python3 by absolute path (a non-shell exec takes
+                 the image PATH, whose third entry is on the tenant-writable data volume), the "no new
+                 dependencies" gate now compares runtime/package.json and runtime/package-lock.json byte
+                 for byte (the root manifest it used to read never carries dependencies), .mjs files are
+                 mirrored into the security scan (the plugin runtime is entirely .mjs), the scan signature
+                 includes the matched text, and a crash during rollback can no longer leave a service
+                 permanently un-updated.
+                 helm_default_values unchanged: appVersion is 0.22.5 in all three chart versions.
+                 回滾值：0.4.4。 -->
+            <field name="helm_chart_version">0.4.5</field>
             <field name="helm_default_values">{"image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/hermes-agent", "tag": "20261025.0421@sha256:39718ca149934e1c4da240a5f41b53d45e0d5b62dba508b79c32fb0ef1aaf0f0"}, "agent": {"resources": {"requests": {"cpu": "500m", "memory": "2Gi"}, "limits": {"cpu": "2", "memory": "6Gi"}}}, "dashboard": {"bindHost": "0.0.0.0", "username": "admin"}, "gateway": {"externalPath": "/gateway"}, "service": {"port": 8080, "name": ""}, "authProxy": {"enabled": true, "basicAuth": true, "basicAuthUsername": "admin", "workerProcesses": 2, "image": {"repository": "nginxinc/nginx-unprivileged", "tag": "1.27-alpine"}}, "console": {"enabled": true, "image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/open-design-console", "tag": "20260720.0332@sha256:2b91c4ad4a6a94d1735c8aa7a6c18ec05491d9db31fa455f5e5da1cbb52b0f92"}, "externalPath": "/console", "resources": {"requests": {"cpu": "50m", "memory": "64Mi"}, "limits": {"cpu": "200m", "memory": "512Mi"}}}, "persistence": {"data": {"size": "5Gi"}}, "postgresql": {"enabled": false}, "redis": {"enabled": false}}</field>
             <field name="helm_value_specs">{"required": [], "optional": [
                 {"key": "auth.minimaxApiKey", "label": "MiniMax API 金鑰", "type": "password",
